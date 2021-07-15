@@ -16,8 +16,8 @@ Post.prototype.cleanUp = function () {
 
     // get rid of any bogus properties
     this.data = {
-        title: sanitizeHTML(this.data.title.trim(), {allowedTags: [], allowedAttributes: {}}),
-        body: sanitizeHTML(this.data.body.trim(), {allowedTags: [], allowedAttributes: {}}),
+        title: sanitizeHTML(this.data.title.trim(), { allowedTags: [], allowedAttributes: {} }),
+        body: sanitizeHTML(this.data.body.trim(), { allowedTags: [], allowedAttributes: {} }),
         createdDate: new Date(),
         author: ObjectID(this.userid)
     }
@@ -76,7 +76,7 @@ Post.prototype.actuallyUpdate = function () {
     })
 }
 
-Post.reusablePostQuery = function (uniqueOperations, visitorId) {
+Post.reusablePostQuery = function (uniqueOperations, visitorId, finalOperations = []) {
     return new Promise(async function (resolve, reject) {
         let aggOperations = uniqueOperations.concat([
             { $lookup: { from: "users", localField: "author", foreignField: "_id", as: "authorDocument" } },
@@ -89,13 +89,14 @@ Post.reusablePostQuery = function (uniqueOperations, visitorId) {
                     author: { $arrayElemAt: ["$authorDocument", 0] }
                 }
             }
-        ])
+        ]).concat(finalOperations)
 
         let posts = await postsCollection.aggregate(aggOperations).toArray()
 
         // clean up author property in each post object
         posts = posts.map(function (post) {
             post.isVisitorOwner = post.authorId.equals(visitorId)
+            post.authorId = undefined
 
             post.author = {
                 username: post.author.username,
@@ -121,7 +122,7 @@ Post.findSingleById = function (id, visitorId) {
         ], visitorId)
 
         if (posts.length) {
-            console.log(posts[0])
+            //console.log(posts[0])
             resolve(posts[0])
         } else {
             reject()
@@ -134,6 +135,35 @@ Post.findByAuthorId = function (authorId) {
         { $match: { author: authorId } },
         { $sort: { createdDate: -1 } }
     ])
+}
+
+Post.delete = function (postIdToDelete, currentUserId) {
+    return new Promise(async (resolve, reject) => {
+        try {
+            let post = await Post.findSingleById(postIdToDelete, currentUserId)
+            if (post.isVisitorOwner) {
+                await postsCollection.deleteOne({ _id: new ObjectID(postIdToDelete) })
+                resolve()
+            } else {
+                reject()
+            }
+        } catch (error) {
+            reject()
+        }
+    })
+}
+
+Post.search = function (searchTerm) {
+    return new Promise(async (resolve, reject) => {
+        if (typeof (searchTerm) == "string") {
+            let posts = await Post.reusablePostQuery([
+                {$match: {$text: {$search: searchTerm}}}
+            ], undefined, [{$sort: {score: {$meta: "textScore"}}}])
+            resolve(posts)
+        } else {
+            reject()
+        }
+    })
 }
 
 module.exports = Post
