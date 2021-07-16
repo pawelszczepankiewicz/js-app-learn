@@ -3,6 +3,7 @@ const session = require('express-session')
 const MongoStore = require('connect-mongo')
 const flash = require('connect-flash')
 const markdown = require('marked')
+const csrf = require('csurf')
 const app = express()
 const sanitizeHTML = require('sanitize-html')
 
@@ -21,7 +22,7 @@ app.use(flash())
 app.use(function (req, res, next) {
     //Make markdown function available from within ejs templates
     res.locals.filterUserHtml = function (content) {
-        return sanitizeHTML(markdown(content), {allowedTags: ['p', 'br', 'ul', 'li', 'ol', 'strong', 'bold', 'i', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'], allowedAttributes: {}})
+        return sanitizeHTML(markdown(content), { allowedTags: ['p', 'br', 'ul', 'li', 'ol', 'strong', 'bold', 'i', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'], allowedAttributes: {} })
     }
 
     // make all error and success flash messages available from all templates
@@ -45,6 +46,43 @@ app.use(express.static('public'))
 app.set('views', 'views')
 app.set('view engine', 'ejs')
 
+app.use(csrf())
+
+app.use(function (req, res, next) {
+    res.locals.csrfToken = req.csrfToken()
+    next()
+})
+
 app.use('/', router)
 
-module.exports = app
+app.use(function (err, req, res, next) {
+    if (err) {
+        if (err.code == "EBADCSRFTOKEN") {
+            req.flash('errors', "Corss site request forgery detected")
+            req.session.save(() => res.redirect('/'))
+        } else {
+            res.render("404")
+        }
+    }
+})
+
+const server = require('http').createServer(app)
+const io = require('socket.io')(server)
+
+io.use(function (socket, next) {
+    sessionOptions(socket.request, socket.request.res, next)
+})
+
+io.on('connection', function (socket) {
+    if (socket.request.session.user) {
+        let user = socket.request.session.user
+
+        socket.emit('welcome', {username: user.username, avatar: user.avatar})
+
+        socket.on('chatMessageFromBrowser', function (data) {
+            socket.broadcast.emit('chatMessageFromServer', { message: sanitizeHTML(data.message, {allowedTags: [], allowedAttributes: []}), username: user.username, avatar: user.avatar })
+        })
+    }
+})
+
+module.exports = server
