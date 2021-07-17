@@ -3,3 +3,6 @@
 
 # enviromental variables
 /.env
+
+# others
+/token.txt
